@@ -86,7 +86,7 @@ app.use((err, req, res, _next) => {
   res.status(500).send("Internal server error");
 });
 
-app.listen(9090, () => {
+app.listen(9090, process.env.SKYVERN_ARTIFACT_BIND_HOST || "0.0.0.0", () => {
   console.log(
     `[${new Date().toISOString()}] Artifact server running at http://localhost:9090`,
   );
