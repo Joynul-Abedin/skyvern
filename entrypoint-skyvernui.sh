@@ -2,6 +2,9 @@
 
 set -euo pipefail
 
+SKYVERN_UI_ROOT="${SKYVERN_UI_ROOT:-/app}"
+cd "$SKYVERN_UI_ROOT"
+
 # Escape special sed characters in a value so it can be used safely in a
 # sed replacement string (s|old|new|g). Handles |, &, \, and / which are
 # metacharacters. Only handles single-line values (sufficient for URLs,
@@ -66,9 +69,9 @@ export VITE_API_BASE_URL
 
 echo "Injecting runtime environment variables into pre-built assets..."
 
-if [ -d /app/dist.template ]; then
-    rm -rf /app/dist
-    cp -r /app/dist.template /app/dist
+if [ -d "${SKYVERN_UI_ROOT}/dist.template" ]; then
+    rm -rf "${SKYVERN_UI_ROOT}/dist"
+    cp -r "${SKYVERN_UI_ROOT}/dist.template" "${SKYVERN_UI_ROOT}/dist"
 fi
 
 # Escape all values for safe use in sed replacement patterns
@@ -86,7 +89,7 @@ ESC_PUBLIC_POSTHOG_HOST=$(escape_sed "$VITE_PUBLIC_POSTHOG_HOST")
 ESC_PUBLIC_POSTHOG_KEY=$(escape_sed "$VITE_PUBLIC_POSTHOG_KEY")
 
 # Replace placeholder strings in pre-built JS and HTML files with actual runtime values
-find /app/dist \( -name "*.js" -o -name "*.html" \) -exec sed -i \
+find "${SKYVERN_UI_ROOT}/dist" \( -name "*.js" -o -name "*.html" \) -exec sed -i \
     -e "s|__VITE_API_BASE_URL_PLACEHOLDER__|${ESC_API_BASE_URL}|g" \
     -e "s|__VITE_WSS_BASE_URL_PLACEHOLDER__|${ESC_WSS_BASE_URL}|g" \
     -e "s|__VITE_ARTIFACT_API_BASE_URL_PLACEHOLDER__|${ESC_ARTIFACT_API_BASE_URL}|g" \
@@ -107,10 +110,10 @@ find /app/dist \( -name "*.js" -o -name "*.html" \) -exec sed -i \
 # Scoped to *.js and *.html (the files sed modifies above) so unmodified
 # sourcemaps don't trigger false positives.
 if grep -rqE --include='*.js' --include='*.html' \
-    '__VITE_[A-Z0-9_]+_PLACEHOLDER__' /app/dist/; then
+    '__VITE_[A-Z0-9_]+_PLACEHOLDER__' "${SKYVERN_UI_ROOT}/dist/"; then
     echo "ERROR: Placeholder replacement incomplete in dist/. Unreplaced placeholders:" >&2
     grep -rhoE --include='*.js' --include='*.html' \
-        '__VITE_[A-Z0-9_]+_PLACEHOLDER__' /app/dist/ \
+        '__VITE_[A-Z0-9_]+_PLACEHOLDER__' "${SKYVERN_UI_ROOT}/dist/" \
         | sort -u | sed 's/^/  /' >&2
     exit 1
 fi
