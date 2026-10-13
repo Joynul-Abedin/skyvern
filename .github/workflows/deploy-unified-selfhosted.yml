@@ -1,0 +1,69 @@
+name: Deploy skyvern-unified (self-hosted)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-skyvern-unified
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  DEPLOY_DIR: /home/shokal/Skyvern/skyvern-unified
+  COMPOSE_FILE: docker-compose.unified.yml
+
+jobs:
+  deploy:
+    name: Build and deploy
+    runs-on: [self-hosted, linux, skyvern]
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Sync source to deploy dir
+        run: |
+          mkdir -p "$DEPLOY_DIR"
+          # .env* hold server secrets and live only on the host; never overwrite or delete them.
+          rsync -a --delete \
+            --exclude '.git/' \
+            --exclude '.env' \
+            --exclude '.env.unified' \
+            "$GITHUB_WORKSPACE"/ "$DEPLOY_DIR"/
+
+      - name: Ensure .env.unified exists
+        working-directory: ${{ env.DEPLOY_DIR }}
+        run: |
+          if [ ! -f .env.unified ]; then
+            echo "::error::$DEPLOY_DIR/.env.unified missing. Copy .env.unified.example there and fill in LLM keys."
+            exit 1
+          fi
+
+      - name: Build and start
+        working-directory: ${{ env.DEPLOY_DIR }}
+        run: docker compose -f "$COMPOSE_FILE" up -d --build --remove-orphans
+
+      - name: Wait for container
+        working-directory: ${{ env.DEPLOY_DIR }}
+        run: |
+          for i in $(seq 1 30); do
+            state=$(docker compose -f "$COMPOSE_FILE" ps --format '{{.State}}' skyvern)
+            if [ "$state" = "running" ]; then
+              echo "skyvern running"
+              exit 0
+            fi
+            sleep 5
+          done
+          docker compose -f "$COMPOSE_FILE" logs --tail 100 skyvern
+          echo "::error::skyvern not running after 150s"
+          exit 1
+
+      - name: Prune dangling images
+        if: success()
+        run: docker image prune -f
