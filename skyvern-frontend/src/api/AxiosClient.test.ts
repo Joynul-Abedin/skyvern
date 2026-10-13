@@ -63,6 +63,39 @@ describe("UI session refresh", () => {
     );
   }
 
+  it("clears the browser API token when the admin login has expired", async () => {
+    window.sessionStorage.setItem(
+      API_KEY_STORAGE_KEY,
+      "expired-admin-session-token",
+    );
+    window.sessionStorage.setItem(API_KEY_EXPIRES_AT_STORAGE_KEY, "1");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            detail: "Sign in to continue",
+            reason: "admin_login_required",
+          }),
+          { status: 401, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+    let expired = false;
+    const listener = () => {
+      expired = true;
+    };
+    window.addEventListener("skyvern:admin-session-expired", listener);
+    try {
+      const { initializeUiSession } = await import("./AxiosClient");
+      await initializeUiSession();
+      expect(window.sessionStorage.getItem(API_KEY_STORAGE_KEY)).toBeNull();
+      expect(expired).toBe(true);
+    } finally {
+      window.removeEventListener("skyvern:admin-session-expired", listener);
+    }
+  });
+
   it("still mints after a single non-JSON response from an endpoint that exists", async () => {
     const fetchMock = vi
       .fn()
