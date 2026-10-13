@@ -90,6 +90,12 @@ skyvern quickstart
 
 The pip quickstart uses SQLite by default. To use a local Postgres container instead, run `skyvern quickstart` (Postgres container is started unless you pass `--no-postgres`), or connect to an existing database with `--database-string=postgresql+psycopg://user:pass@host:5432/dbname`.
 
+### Single image and one domain
+
+For one container containing the API, UI, PostgreSQL and browser services, use
+[the unified-image deployment guide](docs/unified-image.md). It publishes one
+HTTP port and serves the API under `/api/v1` on the same domain as the UI.
+
 ### Option B: Docker Compose
 
 Use this option if you want everything containerized (Postgres, API, UI) and don't want to install Python/Node locally.

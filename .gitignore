@@ -200,3 +200,6 @@ tmp/
 # Claude
 .claude/*
 !.claude/skills/
+
+# Private unified deployment configuration
+.env.unified
