@@ -1,0 +1,20 @@
+# Local ports: MoneyPrinterTurbo already uses host port 8080.
+services:
+  skyvern:
+    volumes:
+      # Run the local diagnostics fix with the prebuilt backend image.
+      - ./skyvern/forge/sdk/routes/internal_auth.py:/app/skyvern/forge/sdk/routes/internal_auth.py:ro
+      - ./skyvern/forge/sdk/routes/internal_llms.py:/app/skyvern/forge/sdk/routes/internal_llms.py:ro
+      - ./skyvern/forge/sdk/routes/ui_session.py:/app/skyvern/forge/sdk/routes/ui_session.py:ro
+    environment:
+      PORT: "8000"
+  skyvern-ui:
+    image: skyvern-ui:local-admin
+    build:
+      context: .
+      dockerfile: Dockerfile.ui
+    environment:
+      VITE_ENVIRONMENT: local
+      VITE_ARTIFACT_API_BASE_URL: http://localhost:8081/artifacts
+    ports: !override
+      - "127.0.0.1:8081:8080"

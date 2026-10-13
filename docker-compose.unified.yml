@@ -1,0 +1,29 @@
+# Use this file explicitly so the legacy docker-compose.override.yml is not loaded.
+name: skyvern-unified
+services:
+  skyvern:
+    image: skyvern:unified
+    build:
+      context: .
+      dockerfile: Dockerfile.unified
+    restart: unless-stopped
+    init: false
+    shm_size: 2gb
+    stop_grace_period: 90s
+    env_file:
+      - path: .env.unified
+        required: false
+    ports:
+      - "${SKYVERN_BIND_ADDRESS:-0.0.0.0}:${SKYVERN_PORT:-8081}:80"
+    volumes:
+      - skyvern-unified-data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+volumes:
+  skyvern-unified-data:
+    name: ${SKYVERN_DATA_VOLUME:-skyvern-unified-data}

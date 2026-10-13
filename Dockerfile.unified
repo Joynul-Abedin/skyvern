@@ -1,0 +1,115 @@
+# syntax=docker/dockerfile:1
+# Override to a freshly built backend image when upgrading Python/server dependencies.
+ARG SKYVERN_BACKEND_IMAGE=public.ecr.aws/skyvern/skyvern@sha256:f5cee716997f96fb9babde0e49c089488655e1fa49b3f24ef7c718008f88fb25
+FROM node:24.14-slim AS ui-builder
+WORKDIR /ui
+COPY skyvern-frontend/package.json skyvern-frontend/package-lock.json ./
+RUN npm ci --include=dev
+COPY skyvern-frontend/ ./
+ENV VITE_API_BASE_URL=__VITE_API_BASE_URL_PLACEHOLDER__ \
+    VITE_WSS_BASE_URL=__VITE_WSS_BASE_URL_PLACEHOLDER__ \
+    VITE_ARTIFACT_API_BASE_URL=__VITE_ARTIFACT_API_BASE_URL_PLACEHOLDER__ \
+    VITE_ENVIRONMENT=__VITE_ENVIRONMENT_PLACEHOLDER__ \
+    VITE_SKYVERN_API_KEY=__SKYVERN_API_KEY_PLACEHOLDER__ \
+    VITE_BROWSER_STREAMING_MODE=__VITE_BROWSER_STREAMING_MODE_PLACEHOLDER__ \
+    VITE_ENABLE_LOG_ARTIFACTS=__VITE_ENABLE_LOG_ARTIFACTS_PLACEHOLDER__ \
+    VITE_ENABLE_CODE_BLOCK=__VITE_ENABLE_CODE_BLOCK_PLACEHOLDER__ \
+    VITE_ENABLE_2FA_NOTIFICATIONS=__VITE_ENABLE_2FA_NOTIFICATIONS_PLACEHOLDER__ \
+    NODE_OPTIONS=--max-old-space-size=4096
+ARG APP_VERSION=unified-local
+ENV APP_VERSION=$APP_VERSION
+RUN npm run build
+
+# The servers import only four packages; keep just their runtime dependency closure (~6 MB, not ~230 MB).
+FROM node:24.14-slim AS ui-runtime
+WORKDIR /ui
+COPY skyvern-frontend/package.json skyvern-frontend/package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+COPY docker/unified/prune_node_modules.mjs /tmp/prune_node_modules.mjs
+RUN node /tmp/prune_node_modules.mjs /ui serve-handler open express cors
+
+FROM ${SKYVERN_BACKEND_IMAGE} AS assemble
+USER root
+WORKDIR /app
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends nginx postgresql postgresql-client tini \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /data \
+    && chmod 755 /data
+# Current source includes local login diagnostics and API-key rotation. Dependencies come
+# from the pinned backend runtime; no developer .env or generated credentials enter this image.
+COPY skyvern/ /app/skyvern.new/
+COPY alembic/ /app/alembic.new/
+COPY scripts/ /app/scripts.new/
+COPY alembic.ini run_streaming.py pyproject.toml entrypoint-skyvernui.sh /app/
+COPY --from=ui-builder /ui/dist /app/skyvern-frontend/dist.template
+COPY --from=ui-runtime /ui/node_modules /app/skyvern-frontend/node_modules
+COPY skyvern-frontend/package.json skyvern-frontend/package-lock.json \
+    skyvern-frontend/localServer.js skyvern-frontend/artifactServer.js \
+    skyvern-frontend/adminAuth.js skyvern-frontend/adminSessionStore.js \
+    skyvern-frontend/apiKeyStore.js skyvern-frontend/loginPage.js /app/skyvern-frontend.new/
+COPY docker/unified/ /app/docker/unified/
+
+# Slim the filesystem. Everything removed here is gone from the final image because the last
+# stage copies this tree into a single fresh layer.
+RUN set -eux; \
+    # Keep only what the unified runtime executes; the base image ships the whole repository.
+    cd /app; \
+    find . -mindepth 1 -maxdepth 1 \
+        ! -name skyvern.new ! -name alembic.new ! -name scripts.new ! -name skyvern-frontend \
+        ! -name skyvern-frontend.new ! -name alembic.ini ! -name run_streaming.py ! -name pyproject.toml \
+        ! -name entrypoint-skyvernui.sh ! -name docker \
+        -exec rm -rf {} +; \
+    rm -rf skyvern-frontend/src skyvern-frontend/public skyvern-frontend/scripts; \
+    find skyvern-frontend -mindepth 1 -maxdepth 1 \
+        ! -name dist.template ! -name node_modules -exec rm -rf {} +; \
+    mv skyvern.new skyvern; mv alembic.new alembic; mv scripts.new scripts; \
+    cp -a skyvern-frontend.new/. skyvern-frontend/; rm -rf skyvern-frontend.new; \
+    # Only Chromium is used (BROWSER_TYPE=chromium-headful); drop Firefox, WebKit and non-English UI packs.
+    rm -rf /root/.cache/ms-playwright/firefox-* /root/.cache/ms-playwright/webkit-*; \
+    find /root/.cache/ms-playwright -path '*/locales/*.pak' ! -name 'en-US.pak' -delete; \
+    # Playwright's private Node runtime duplicates the system Node already in this image.
+    ln -sf /usr/bin/node /usr/local/lib/python3.11/site-packages/playwright/driver/node; \
+    # Type stubs are only imported under TYPE_CHECKING.
+    rm -rf /usr/local/lib/python3.11/site-packages/types_* \
+           /usr/local/lib/python3.11/site-packages/botocore_stubs*; \
+    # PostgreSQL JIT (run with jit=off) and Mesa's software GL are unused by headless services and Chromium.
+    rm -f /usr/lib/*-linux-gnu/libLLVM-1*.so* /usr/lib/postgresql/*/lib/llvmjit*; \
+    rm -rf /usr/lib/*-linux-gnu/dri; \
+    # Package managers, headers, docs and build leftovers are not needed at runtime.
+    rm -rf /usr/lib/node_modules/npm /usr/lib/node_modules/corepack /usr/include \
+           /usr/share/doc /usr/share/man /usr/share/info /usr/share/icons /usr/share/sounds \
+           /usr/share/i18n /usr/share/locale /tmp/* /root/.npm /root/.cache/pip \
+           /var/cache/apt /var/lib/postgresql/*/main; \
+    find /var/log -type f -delete; \
+    mkdir -p /data /tmp; chmod 1777 /tmp; chmod 755 /data
+
+# Flatten into one layer so deletions reduce the image instead of hiding data in lower layers.
+FROM scratch
+COPY --from=assemble / /
+ENV PATH=/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    LANG=C.UTF-8 \
+    PYTHON_VERSION=3.11.16 \
+    PYTHONPATH=/app \
+    ENV=local \
+    BROWSER_TYPE=chromium-headful \
+    BROWSER_STREAMING_MODE=cdp \
+    VITE_BROWSER_STREAMING_MODE=cdp \
+    VIDEO_PATH=/data/videos \
+    HAR_PATH=/data/har \
+    LOG_PATH=/data/log \
+    ARTIFACT_STORAGE_PATH=/data/artifacts \
+    DOWNLOAD_PATH=/data/downloads \
+    BROWSER_SESSION_BASE_PATH=/data/browser_sessions \
+    LOCAL_CREDENTIAL_VAULT_PATH=/data/credential_vault \
+    SKYVERN_STATE_DIR=/data/state \
+    SKYVERN_DEV_NO_RELOAD=true
+USER root
+WORKDIR /app
+VOLUME ["/data"]
+EXPOSE 80
+HEALTHCHECK --interval=15s --timeout=12s --start-period=300s --retries=4 \
+    CMD ["python", "/app/docker/unified/healthcheck.py"]
+STOPSIGNAL SIGTERM
+ENTRYPOINT ["/usr/bin/tini", "-g", "--"]
+CMD ["python", "/app/docker/unified/launcher.py"]
