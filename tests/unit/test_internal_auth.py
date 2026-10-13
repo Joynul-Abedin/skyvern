@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.testclient import TestClient
 
 from skyvern.forge.agent_functions import AgentFunction
-from skyvern.forge.sdk.routes import internal_auth
+from skyvern.forge.sdk.routes import internal_auth, internal_llms
 from skyvern.forge.sdk.schemas.organizations import OrganizationAuthTokenType
 
 
@@ -112,3 +112,75 @@ def test_diagnostics_body_discloses_only_the_status() -> None:
     payload = internal_auth._emit_diagnostics(result)
 
     assert payload == {"status": "ok"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("diagnostic", ["auth", "llms"])
+async def test_diagnostics_accept_valid_ui_session_from_docker_gateway(
+    monkeypatch: pytest.MonkeyPatch, diagnostic: str
+) -> None:
+    monkeypatch.setattr(internal_auth, "settings", SimpleNamespace(ENV="local"))
+    monkeypatch.setattr(internal_auth.app, "AGENT_FUNCTION", AgentFunction())
+    monkeypatch.setattr(internal_auth.app, "DATABASE", object())
+
+    async def resolve_ui_session(token: str, _db: object, token_types: tuple[OrganizationAuthTokenType, ...]) -> object:
+        assert token == "local-ui-session-canary"
+        assert OrganizationAuthTokenType.ui_session in token_types
+        return SimpleNamespace(
+            organization=SimpleNamespace(organization_id="org-local"),
+            payload=SimpleNamespace(exp=4102444800),
+        )
+
+    monkeypatch.setattr(internal_auth, "resolve_org_from_api_key", resolve_ui_session)
+    monkeypatch.setattr(internal_llms, "evaluate_llm_status", AsyncMock(return_value=SimpleNamespace(status="ok")))
+    request = _request_with_api_key()
+    request.scope["client"] = ("172.18.0.1", 1234)
+
+    if diagnostic == "auth":
+        assert await internal_auth.auth_status(request) == {"status": "ok"}
+    else:
+        assert (await internal_llms.llm_status(request)).status == "ok"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("diagnostic", ["auth", "llms"])
+@pytest.mark.parametrize("token", ["", "invalid-ui-session", "expired-ui-session"])
+async def test_diagnostics_reject_unauthenticated_non_loopback_requests(
+    monkeypatch: pytest.MonkeyPatch, diagnostic: str, token: str
+) -> None:
+    monkeypatch.setattr(internal_auth, "settings", SimpleNamespace(ENV="local"))
+    monkeypatch.setattr(internal_auth.app, "AGENT_FUNCTION", AgentFunction())
+    monkeypatch.setattr(internal_auth.app, "DATABASE", object())
+
+    async def reject_token(*args: object, **kwargs: object) -> object:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Invalid or expired credential")
+
+    monkeypatch.setattr(internal_auth, "resolve_org_from_api_key", reject_token)
+    evaluate_llms = AsyncMock(side_effect=AssertionError("Unauthenticated diagnostics ran"))
+    monkeypatch.setattr(internal_llms, "evaluate_llm_status", evaluate_llms)
+    request = _request(client_host="172.18.0.1")
+    request.scope["headers"] = [
+        (b"x-api-key", token.encode()),
+        (b"x-forwarded-for", b"127.0.0.1"),
+    ]
+    handler = internal_auth.auth_status if diagnostic == "auth" else internal_llms.llm_status
+
+    with pytest.raises(HTTPException) as exc_info:
+        await handler(request)
+
+    assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
+    evaluate_llms.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("diagnostic", ["auth", "llms"])
+async def test_valid_credentials_do_not_enable_diagnostics_outside_local_mode(
+    monkeypatch: pytest.MonkeyPatch, diagnostic: str
+) -> None:
+    monkeypatch.setattr(internal_auth, "settings", SimpleNamespace(ENV="prod"))
+    handler = internal_auth.auth_status if diagnostic == "auth" else internal_llms.llm_status
+
+    with pytest.raises(HTTPException) as exc_info:
+        await handler(_request_with_api_key())
+
+    assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
