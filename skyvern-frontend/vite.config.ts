@@ -10,6 +10,8 @@ import {
   issueUiSessionNonceCookie,
 } from "./localServer.js";
 import { resolveAppVersion } from "./scripts/app-version.mjs";
+import { createAdminAuth } from "./adminAuth.js";
+import { createApiKeyStore, resolveApiKeyStorePath } from "./apiKeyStore.js";
 
 // https://vitejs.dev/config/
 const devPort = process.env.VITE_DEV_PORT
@@ -49,10 +51,23 @@ export function createUiSessionDevPlugin({
 }: UiSessionDevPluginOptions): Plugin {
   const apiBaseUrl = resolveServerApiBaseUrl(env);
   const organizationApiKey = resolveOrganizationApiKey(env);
+  const apiKeyStore = createApiKeyStore({
+    path: resolveApiKeyStorePath(env),
+    organizationApiKey,
+    apiBaseUrl,
+    fetchImpl,
+  });
+  const adminAuth = createAdminAuth({
+    env,
+    organizationApiKey,
+    getOrganizationApiKey: apiKeyStore.get,
+    rotateApiKey: apiKeyStore.rotate,
+  });
   const nonceManager = createUiSessionNonceManager();
   const serveUiSession = createUiSessionHandler({
     apiBaseUrl,
     organizationApiKey,
+    getOrganizationApiKey: apiKeyStore.get,
     fetchImpl,
     logger,
     requestTimeoutMs,
@@ -67,7 +82,15 @@ export function createUiSessionDevPlugin({
     name: "ui-session-dev",
     apply: "serve",
     configureServer(server) {
-      server.middlewares.use((request, response, next) => {
+      server.middlewares.use(async (request, response, next) => {
+        const pathname = new URL(request.url || "/", "http://localhost")
+          .pathname;
+        try {
+          if (await adminAuth.handle(request, response, pathname)) return;
+        } catch (error) {
+          next(error);
+          return;
+        }
         issueUiSessionNonceCookie(request, response, nonceManager);
         next();
       });
@@ -94,6 +117,13 @@ export default defineConfig(({ mode }) => {
 
     server: {
       port: devPort,
+      proxy: {
+        "/artifacts": {
+          target: "http://127.0.0.1:9090",
+          rewrite: (requestPath: string) =>
+            requestPath.replace(/^\/artifacts/, ""),
+        },
+      },
       allowedHosts: process.env.VITE_ALLOWED_HOSTS
         ? process.env.VITE_ALLOWED_HOSTS.split(",")
         : [],
