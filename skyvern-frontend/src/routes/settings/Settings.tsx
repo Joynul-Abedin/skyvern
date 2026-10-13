@@ -29,6 +29,7 @@ import { OrgLLMDefaultsCard } from "@/components/OrgLLMDefaultsCard";
 import { GoogleOAuthClientConfigForm } from "@/components/GoogleOAuthClientConfigForm";
 import { useVersionQuery } from "@/hooks/useVersionQuery";
 import { formatVersion, getAppVersion } from "@/util/version";
+import { AdminApiKeyCard } from "@/components/AdminApiKeyCard";
 
 // The browser holds a scoped session token rather than the organization key, so a value copied
 // from here stops working at expiry. Say which one is on screen.
@@ -41,7 +42,7 @@ function describeRuntimeCredential(credential: RuntimeCredential): string {
   }
   return (
     `Short-lived browser session token, valid until ${new Date(credential.expiresAt * 1000).toLocaleTimeString()}. ` +
-    "For SDK, CI, or scheduled callers, use the organization API key from your server configuration."
+    "For curl, SDKs, or scheduled callers, use the API key shown above."
   );
 }
 
@@ -88,9 +89,10 @@ function Settings() {
           </div>
         </CardContent>
       </Card>
+      <AdminApiKeyCard />
       <Card>
         <CardHeader className="border-b-2">
-          <CardTitle className="text-lg">API Key</CardTitle>
+          <CardTitle className="text-lg">Browser session token</CardTitle>
           <CardDescription>
             {describeRuntimeCredential(credential)}
           </CardDescription>

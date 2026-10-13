@@ -8,6 +8,7 @@ import { SideNav } from "./SideNav";
 import { cn } from "@/util/utils";
 import { Button } from "@/components/ui/button";
 import { ChevronLeftIcon, ChevronRightIcon } from "@radix-ui/react-icons";
+import { AdminLogoutButton } from "@/components/AdminLogoutButton";
 
 type Props = {
   useCollapsedState?: boolean;
@@ -42,6 +43,7 @@ function SidebarContent({ useCollapsedState }: Props) {
         <SideNav collapsed={collapsed} />
       </div>
       <SidebarResourceLinks collapsed={collapsed} />
+      <AdminLogoutButton collapsed={collapsed} />
       <div
         className={cn(
           "mt-auto flex min-h-14 items-center border-t border-neutral-200 dark:border-white/[0.06]",
