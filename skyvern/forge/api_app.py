@@ -207,6 +207,8 @@ def custom_openapi(app: FastAPI) -> dict:
         {"url": "https://api-staging.skyvern.com", "x-fern-server-name": "Staging"},
         {"url": "http://localhost:8000", "x-fern-server-name": "Local"},
     ]
+    if os.environ.get("SKYVERN_UNIFIED_MODE") == "true":
+        openapi_schema["servers"] = [{"url": "/"}]
     app.openapi_schema = openapi_schema
     return app.openapi_schema
 
