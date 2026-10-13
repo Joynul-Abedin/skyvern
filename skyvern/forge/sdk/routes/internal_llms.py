@@ -9,7 +9,7 @@ from skyvern.forge import app
 from skyvern.forge.sdk.api.llm.config_registry import LLMConfigRegistrationIssue, LLMConfigRegistry
 from skyvern.forge.sdk.api.llm.exceptions import InvalidLLMConfigError
 from skyvern.forge.sdk.db.enums import OrganizationAuthTokenType
-from skyvern.forge.sdk.routes.internal_auth import _require_local_access
+from skyvern.forge.sdk.routes.internal_auth import _require_diagnostics_access
 from skyvern.forge.sdk.schemas.custom_llms import CustomLLMConfig
 from skyvern.forge.sdk.services.local_org_auth_token_service import SKYVERN_LOCAL_DOMAIN
 
@@ -128,5 +128,5 @@ async def evaluate_llm_status() -> LLMDiagnosticsResponse:
 
 @router.get("/status", response_model=LLMDiagnosticsResponse, include_in_schema=False)
 async def llm_status(request: Request) -> LLMDiagnosticsResponse:
-    _require_local_access(request)
+    await _require_diagnostics_access(request)
     return await evaluate_llm_status()
