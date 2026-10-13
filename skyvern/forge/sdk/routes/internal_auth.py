@@ -51,11 +51,25 @@ def _is_local_request(request: Request) -> bool:
     return is_local
 
 
-def _require_local_access(request: Request) -> None:
+async def _require_diagnostics_access(request: Request) -> DiagnosticsResult | None:
+    """Allow local diagnostics through loopback or an authenticated Docker connection."""
     if settings.ENV != "local":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Endpoint only available in local env")
-    if not _is_local_request(request):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Endpoint requires localhost access")
+    if _is_local_request(request):
+        return None
+
+    # Docker forwards localhost traffic from a bridge address. Authenticate the
+    # credential instead of trusting private IP ranges or forwarding headers.
+    token = request.headers.get("x-api-key") or ""
+    if token:
+        result = await _evaluate_local_api_key(token)
+        if result.status is AuthStatus.ok:
+            return result
+
+    raise HTTPException(
+        status.HTTP_403_FORBIDDEN,
+        "Endpoint requires localhost access or a valid Skyvern credential",
+    )
 
 
 async def _evaluate_local_api_key(token: str) -> DiagnosticsResult:
@@ -134,7 +148,8 @@ def _emit_diagnostics(result: DiagnosticsResult) -> dict[str, object]:
 
 @router.get("/status", include_in_schema=False)
 async def auth_status(request: Request) -> dict[str, object]:
-    _require_local_access(request)
-    token_candidate = request.headers.get("x-api-key") or ""
-    result = await _evaluate_local_api_key(token_candidate)
+    result = await _require_diagnostics_access(request)
+    if result is None:
+        token_candidate = request.headers.get("x-api-key") or ""
+        result = await _evaluate_local_api_key(token_candidate)
     return _emit_diagnostics(result)
