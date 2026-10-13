@@ -5,7 +5,7 @@ import { statusIsNotFinalized } from "@/routes/tasks/types";
 import { useCredentialGetter } from "@/hooks/useCredentialGetter";
 import { useLogging } from "@/hooks/useLogging";
 import { useFirstParam } from "@/hooks/useFirstParam";
-import { getCredentialParam } from "@/util/env";
+import { getCredentialParam, wssBaseUrl } from "@/util/env";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCdpInput } from "@/routes/streaming/useCdpInput";
 import { InteractiveStreamView } from "@/routes/streaming/InteractiveStreamView";
@@ -77,8 +77,6 @@ interface Props {
   // Studio centers the frame; legacy keeps the zoomable image.
   centered?: boolean;
 }
-
-const wssBaseUrl = import.meta.env.VITE_WSS_BASE_URL;
 
 function WorkflowRunStream({
   alwaysShowStream = false,

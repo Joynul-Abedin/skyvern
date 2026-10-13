@@ -8,7 +8,7 @@ import { ZoomableImage } from "@/components/ZoomableImage";
 import { useCostCalculator } from "@/hooks/useCostCalculator";
 import { useCredentialGetter } from "@/hooks/useCredentialGetter";
 import { useStreamTransport } from "@/hooks/useRuntimeConfig";
-import { getCredentialParam } from "@/util/env";
+import { getCredentialParam, wssBaseUrl } from "@/util/env";
 import {
   EXTERNAL_BROWSER_DIAGNOSTIC,
   STREAM_STARTING_DIAGNOSTIC,
@@ -85,8 +85,6 @@ function diagnosticForClose(event: CloseEvent): StreamDiagnostic {
     detail: `WebSocket closed with code ${event.code}${event.reason ? ` (${event.reason})` : ""}.`,
   };
 }
-
-const wssBaseUrl = import.meta.env.VITE_WSS_BASE_URL;
 
 function TaskActions() {
   const taskId = useFirstParam("taskId", "runId");

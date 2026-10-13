@@ -7,6 +7,7 @@ import { WorkflowRunStream } from "./WorkflowRunStream";
 
 vi.mock("@/util/env", () => ({
   getCredentialParam: vi.fn(async () => "apikey=test"),
+  wssBaseUrl: "wss://automation.example.test/api/v1",
 }));
 
 vi.mock("@/hooks/useCredentialGetter", () => {
