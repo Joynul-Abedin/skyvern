@@ -1,4 +1,6 @@
-const apiBaseUrl = import.meta.env.VITE_API_BASE_URL as string;
+import { resolveServiceUrl } from "./serviceUrl";
+
+const apiBaseUrl = resolveServiceUrl(import.meta.env.VITE_API_BASE_URL);
 
 if (!apiBaseUrl) {
   console.warn("apiBaseUrl environment variable was not set");
@@ -14,7 +16,9 @@ const browserStreamingMode = (
   (import.meta.env.VITE_BROWSER_STREAMING_MODE as string | undefined) || "vnc"
 ).toLowerCase();
 
-const artifactApiBaseUrl = import.meta.env.VITE_ARTIFACT_API_BASE_URL;
+const artifactApiBaseUrl = resolveServiceUrl(
+  import.meta.env.VITE_ARTIFACT_API_BASE_URL,
+);
 
 if (!artifactApiBaseUrl) {
   console.warn("artifactApiBaseUrl environment variable was not set");
@@ -31,7 +35,11 @@ const lsKeys = {
   apiKeyExpiresAt: API_KEY_EXPIRES_AT_STORAGE_KEY,
 };
 
-const wssBaseUrl = import.meta.env.VITE_WSS_BASE_URL;
+const wssBaseUrl = resolveServiceUrl(
+  import.meta.env.VITE_WSS_BASE_URL,
+  window.location.origin,
+  true,
+);
 
 let newWssBaseUrl = wssBaseUrl;
 try {

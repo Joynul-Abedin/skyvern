@@ -1,10 +1,12 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { createServer } from "http";
+import { createServer, request as httpRequest } from "http";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseEnv } from "node:util";
 import handler from "serve-handler";
 import open from "open";
+import { createAdminAuth } from "./adminAuth.js";
+import { createApiKeyStore, resolveApiKeyStorePath } from "./apiKeyStore.js";
 
 const DEFAULT_API_BASE_URL = "http://localhost:8000/api/v1";
 const COMPOSE_API_BASE_URL = "http://skyvern:8000/api/v1";
@@ -161,10 +163,16 @@ function issueUiSessionNonceCookie(request, response, nonceManager) {
   ) {
     return;
   }
-  response.setHeader(
-    "set-cookie",
+  // Append: replacing would drop cookies set earlier, such as the renewed admin session.
+  const existing = response.getHeader("set-cookie");
+  response.setHeader("set-cookie", [
+    ...(Array.isArray(existing)
+      ? existing
+      : existing
+        ? [String(existing)]
+        : []),
     `${UI_SESSION_NONCE_COOKIE}=${nonceManager.issue()}; Path=/ui-session; HttpOnly; SameSite=Strict`,
-  );
+  ]);
 }
 
 function getCookie(request, name) {
@@ -240,6 +248,7 @@ function mintFailure(reason) {
 function createUiSessionHandler({
   apiBaseUrl,
   organizationApiKey,
+  getOrganizationApiKey = async () => organizationApiKey,
   fetchImpl = fetch,
   logger = console,
   requestTimeoutMs = UI_SESSION_REQUEST_TIMEOUT_MS,
@@ -278,7 +287,7 @@ function createUiSessionHandler({
             method: "POST",
             headers: {
               accept: "application/json",
-              "x-api-key": organizationApiKey,
+              "x-api-key": await getOrganizationApiKey(),
             },
             signal: abortController.signal,
           },
@@ -343,15 +352,15 @@ function createUiSessionHandler({
     }
     const bypassCache =
       request.headers["x-skyvern-ui-session-refresh"] === "auth-failure";
-    if (!organizationApiKey) {
-      sendJson(response, 503, {
-        detail: UI_SESSION_FAILURE_DETAIL[UI_SESSION_NOT_CONFIGURED],
-        reason: UI_SESSION_NOT_CONFIGURED,
-      });
-      return;
-    }
-
     try {
+      if (!(await getOrganizationApiKey())) {
+        sendJson(response, 503, {
+          detail: UI_SESSION_FAILURE_DETAIL[UI_SESSION_NOT_CONFIGURED],
+          reason: UI_SESSION_NOT_CONFIGURED,
+        });
+        return;
+      }
+
       sendJson(response, 200, await getUiSession(bypassCache));
     } catch (error) {
       const reason = UI_SESSION_FAILURE_DETAIL[error?.reason]
@@ -373,11 +382,26 @@ function createLocalServer({
   fetchImpl = fetch,
   logger = console,
   requestTimeoutMs = UI_SESSION_REQUEST_TIMEOUT_MS,
+  adminNow = Date.now,
+  apiKeyStore = createApiKeyStore({
+    path: resolveApiKeyStorePath(env),
+    organizationApiKey,
+    apiBaseUrl,
+    fetchImpl,
+  }),
 } = {}) {
+  const adminAuth = createAdminAuth({
+    env,
+    now: adminNow,
+    organizationApiKey,
+    getOrganizationApiKey: apiKeyStore.get,
+    rotateApiKey: apiKeyStore.rotate,
+  });
   const nonceManager = createUiSessionNonceManager(organizationApiKey);
   const serveUiSession = createUiSessionHandler({
     apiBaseUrl,
     organizationApiKey,
+    getOrganizationApiKey: apiKeyStore.get,
     fetchImpl,
     logger,
     requestTimeoutMs,
@@ -386,6 +410,53 @@ function createLocalServer({
 
   return createServer(async (request, response) => {
     const requestUrl = new URL(request.url || "/", "http://localhost");
+    try {
+      if (await adminAuth.handle(request, response, requestUrl.pathname))
+        return;
+    } catch {
+      logger.error("Admin authentication request failed");
+      if (!response.headersSent)
+        sendJson(response, 500, {
+          detail: "Unable to process sign-in request",
+        });
+      else response.destroy();
+      return;
+    }
+    if (requestUrl.pathname.startsWith("/artifacts/")) {
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        sendJson(response, 405, { detail: "Method not allowed" });
+        return;
+      }
+      const upstream = httpRequest(
+        {
+          hostname: "127.0.0.1",
+          port: 9090,
+          path: request.url.slice("/artifacts".length),
+          method: request.method,
+          headers: {
+            ...(request.headers.range ? { range: request.headers.range } : {}),
+          },
+          timeout: 10_000,
+        },
+        (artifact) => {
+          // Do not forward the artifact server's wildcard CORS policy.
+          const headers = { ...artifact.headers, "cache-control": "no-store" };
+          delete headers["access-control-allow-origin"];
+          response.writeHead(artifact.statusCode ?? 502, headers);
+          artifact.on("error", () => response.destroy());
+          artifact.pipe(response);
+        },
+      );
+      upstream.on("timeout", () => upstream.destroy());
+      upstream.on("error", () => {
+        if (!response.headersSent)
+          sendJson(response, 502, { detail: "Artifact server is unavailable" });
+        else response.destroy();
+      });
+      response.on("close", () => upstream.destroy());
+      upstream.end();
+      return;
+    }
     if (requestUrl.pathname === "/ui-session") {
       await serveUiSession(request, response);
       return;
@@ -394,6 +465,16 @@ function createLocalServer({
     issueUiSessionNonceCookie(request, response, nonceManager);
     await handler(request, response, {
       public: "dist",
+      ...(adminAuth.enabled
+        ? {
+            headers: [
+              {
+                source: "**",
+                headers: [{ key: "Cache-Control", value: "no-store" }],
+              },
+            ],
+          }
+        : {}),
       rewrites: [
         {
           source: "**",
@@ -412,14 +493,18 @@ function startLocalServer() {
     console.error("UI session minting is disabled: no organization key found");
   }
   const server = createLocalServer({ apiBaseUrl, organizationApiKey });
-  server.listen(8080, async () => {
-    console.log("Running at http://localhost:8080");
-    try {
-      await open("http://localhost:8080");
-    } catch {
-      // Expected to fail in Docker containers where no browser is available
-    }
-  });
+  server.listen(
+    8080,
+    process.env.SKYVERN_UI_BIND_HOST || "0.0.0.0",
+    async () => {
+      console.log("Running at http://localhost:8080");
+      try {
+        await open("http://localhost:8080");
+      } catch {
+        // Expected to fail in Docker containers where no browser is available
+      }
+    },
+  );
 }
 
 const isMainModule =

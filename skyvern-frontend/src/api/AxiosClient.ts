@@ -193,6 +193,24 @@ async function requestUiSession(bypassCache = false): Promise<boolean> {
       // A deployment without the endpoint is not a misconfiguration; only a server that answered
       // and refused has something an operator can act on.
       if (!endpointAbsent && hasJsonContentType) {
+        if (response.status === 401) {
+          const failure: unknown = await response
+            .clone()
+            .json()
+            .catch(() => null);
+          if (
+            failure &&
+            typeof failure === "object" &&
+            "reason" in failure &&
+            failure.reason === "admin_login_required"
+          ) {
+            uiSessionEnabled = false;
+            if (uiSessionRefreshTimer) clearTimeout(uiSessionRefreshTimer);
+            removeApiKeyHeader();
+            window.dispatchEvent(new Event("skyvern:admin-session-expired"));
+            return false;
+          }
+        }
         useAuthIssueStore.getState().reportUiSessionFailure({
           statusCode: response.status,
           detail: await readUiSessionFailureDetail(response),
